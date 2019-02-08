@@ -13,11 +13,15 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
 
-from models import Seq2Seq2Decoder, MLP_D, MLP_G, MLP_Classify
+from models import Seq2Seq2Decoder, MLP_D, MLP_G, MLP_Classify, load_models
 from utils import to_gpu, Corpus, batchify
 
 parser = argparse.ArgumentParser(description='ARAE for Yelp transfer')
 # Path Arguments
+parser.add_argument('--load_path', type=str,
+                    help='location of saved models to load')
+parser.add_argument('--load_epoch', type=int, default=1,
+                    help='epoch to warm start from')
 parser.add_argument('--data_path', type=str, required=True,
                     help='location of the data corpus')
 parser.add_argument('--outf', type=str, default='yelp_example',
@@ -168,7 +172,7 @@ print("Vocabulary Size: {}".format(ntokens))
 args.ntokens = ntokens
 with open('{}/args.json'.format(args.outf), 'w') as f:
     json.dump(vars(args), f)
-with open("{}/log.txt".format(args.outf), 'w') as f:
+with open("{}/logs.txt".format(args.outf), 'w') as f:
     f.write(str(vars(args)))
     f.write("\n\n")
 
@@ -185,19 +189,25 @@ print("Loaded data!")
 ###############################################################################
 
 ntokens = len(corpus.dictionary.word2idx)
-autoencoder = Seq2Seq2Decoder(emsize=args.emsize,
-                              nhidden=args.nhidden,
-                              ntokens=ntokens,
-                              nlayers=args.nlayers,
-                              noise_r=args.noise_r,
-                              hidden_init=args.hidden_init,
-                              dropout=args.dropout,
-                              gpu=args.cuda)
-
-gan_gen = MLP_G(ninput=args.z_size, noutput=args.nhidden, layers=args.arch_g)
-gan_disc = MLP_D(ninput=args.nhidden, noutput=1, layers=args.arch_d)
-classifier = MLP_Classify(ninput=args.nhidden, noutput=1, layers=args.arch_classify)
 g_factor = None
+
+if args.load_path:
+    print('Warm starting at {}_{}'.format(args.load_epoch, args.load_path))
+    _model_args, _idx2word, autoencoder, gan_gen, gan_disc, classifier = \
+        load_models(args.load_path, args.load_epoch, twodecoders=True)
+else:
+    autoencoder = Seq2Seq2Decoder(emsize=args.emsize,
+                                  nhidden=args.nhidden,
+                                  ntokens=ntokens,
+                                  nlayers=args.nlayers,
+                                  noise_r=args.noise_r,
+                                  hidden_init=args.hidden_init,
+                                  dropout=args.dropout,
+                                  gpu=args.cuda)
+
+    gan_gen = MLP_G(ninput=args.z_size, noutput=args.nhidden, layers=args.arch_g)
+    gan_disc = MLP_D(ninput=args.nhidden, noutput=1, layers=args.arch_d)
+    classifier = MLP_Classify(ninput=args.nhidden, noutput=1, layers=args.arch_classify)
 
 print(autoencoder)
 print(gan_gen)
@@ -231,14 +241,16 @@ if args.cuda:
 ###############################################################################
 
 
-def save_model():
+def save_model(epoch):
     print("Saving models")
-    with open('{}/autoencoder_model.pt'.format(args.outf), 'wb') as f:
+    with open('{}/autoencoder_model_{}.pt'.format(args.outf, epoch), 'wb') as f:
         torch.save(autoencoder.state_dict(), f)
-    with open('{}/gan_gen_model.pt'.format(args.outf), 'wb') as f:
+    with open('{}/gan_gen_model_{}.pt'.format(args.outf, epoch), 'wb') as f:
         torch.save(gan_gen.state_dict(), f)
-    with open('{}/gan_disc_model.pt'.format(args.outf), 'wb') as f:
+    with open('{}/gan_disc_model_{}.pt'.format(args.outf, epoch), 'wb') as f:
         torch.save(gan_disc.state_dict(), f)
+    with open('{}/classifier_model_{}.pt'.format(args.outf, epoch), 'wb') as f:
+        torch.save(classifier.state_dict(), f)
 
 
 def train_classifier(whichclass, batch):
@@ -422,7 +434,7 @@ def train_ae(whichdecoder, batch, total_loss_ae, start_time, i):
                       elapsed * 1000 / args.log_interval,
                       cur_loss, math.exp(cur_loss), accuracy))
 
-        with open("{}/log.txt".format(args.outf), 'a') as f:
+        with open("{}/logs.txt".format(args.outf), 'a') as f:
             f.write('| epoch {:3d} | {:5d}/{:5d} batches | ms/batch {:5.2f} | '
                     'loss {:5.2f} | ppl {:8.2f} | acc {:8.2f}\n'.
                     format(epoch, i, len(train1_data),
@@ -534,7 +546,7 @@ def train_gan_d_into_ae(whichdecoder, batch):
 
 
 print("Training...")
-with open("{}/log.txt".format(args.outf), 'a') as f:
+with open("{}/logs.txt".format(args.outf), 'a') as f:
     f.write('Training...\n')
 
 # schedule of increasing GAN training loops
@@ -550,12 +562,19 @@ fixed_noise.data.normal_(0, 1)
 one = to_gpu(args.cuda, torch.tensor(1.0))
 mone = one * -1
 
-for epoch in range(1, args.epochs + 1):
+for epoch in range(args.load_epoch, args.load_epoch + args.epochs):
     # update gan training schedule
     if epoch in gan_schedule:
         niter_gan += 1
         print("GAN training loop schedule increased to {}".format(niter_gan))
-        with open("{}/log.txt".format(args.outf), 'a') as f:
+        with open("{}/logs.txt".format(args.outf), 'a') as f:
+            f.write('[%d/%d][%d/%d] Loss_D: %.4f (Loss_D_real: %.4f '
+                    'Loss_D_fake: %.4f) Loss_G: %.4f\n'
+                    % (epoch, args.epochs, niter, len(train1_data),
+                       errD.item(), errD_real.item(),
+                       errD_fake.item(), errG.item()))
+            f.write("Classify loss: {:5.2f} | Classify accuracy: {:3.3f}\n".format(
+                    classify_loss, classify_acc))
             f.write("GAN training loop schedule increased to {}\n".
                     format(niter_gan))
 
@@ -627,7 +646,7 @@ for epoch in range(1, args.epochs + 1):
                      errD_fake.item(), errG.item()))
             print("Classify loss: {:5.2f} | Classify accuracy: {:3.3f}\n".format(
                 classify_loss, classify_acc))
-            with open("{}/log.txt".format(args.outf), 'a') as f:
+            with open("{}/logs.txt".format(args.outf), 'a') as f:
                 f.write('[%d/%d][%d/%d] Loss_D: %.4f (Loss_D_real: %.4f '
                         'Loss_D_fake: %.4f) Loss_G: %.4f\n'
                         % (epoch, args.epochs, niter, len(train1_data),
@@ -640,6 +659,7 @@ for epoch in range(1, args.epochs + 1):
             autoencoder.noise_r = \
                 autoencoder.noise_r * args.noise_anneal
 
+
     # end of epoch ----------------------------
     # evaluation
     test_loss, accuracy = evaluate_autoencoder(1, test1_data[:1000], epoch)
@@ -649,7 +669,7 @@ for epoch in range(1, args.epochs + 1):
           format(epoch, (time.time() - epoch_start_time),
                  test_loss, math.exp(test_loss), accuracy))
     print('-' * 89)
-    with open("{}/log.txt".format(args.outf), 'a') as f:
+    with open("{}/logs.txt".format(args.outf), 'a') as f:
         f.write('-' * 89)
         f.write('\n| end of epoch {:3d} | time: {:5.2f}s | test loss {:5.2f} |'
                 ' test ppl {:5.2f} | acc {:3.3f}\n'.
@@ -665,7 +685,7 @@ for epoch in range(1, args.epochs + 1):
           format(epoch, (time.time() - epoch_start_time),
                  test_loss, math.exp(test_loss), accuracy))
     print('-' * 89)
-    with open("{}/log.txt".format(args.outf), 'a') as f:
+    with open("{}/logs.txt".format(args.outf), 'a') as f:
         f.write('-' * 89)
         f.write('\n| end of epoch {:3d} | time: {:5.2f}s | test loss {:5.2f} |'
                 ' test ppl {:5.2f} | acc {:3.3f}\n'.
@@ -676,6 +696,10 @@ for epoch in range(1, args.epochs + 1):
 
     evaluate_generator(1, fixed_noise, "end_of_epoch_{}".format(epoch))
     evaluate_generator(2, fixed_noise, "end_of_epoch_{}".format(epoch))
+    save_model(epoch)
+
+    if args.debug:
+        continue
 
     # shuffle between epochs
     train1_data = batchify(corpus.data['train1'], args.batch_size, shuffle=True)
@@ -688,7 +712,7 @@ print('| end of epoch {:3d} | time: {:5.2f}s | test loss {:5.2f} | '
       format(epoch, (time.time() - epoch_start_time),
              test_loss, math.exp(test_loss), accuracy))
 print('-' * 89)
-with open("{}/log.txt".format(args.outf), 'a') as f:
+with open("{}/logs.txt".format(args.outf), 'a') as f:
     f.write('-' * 89)
     f.write('\n| end of epoch {:3d} | time: {:5.2f}s | test loss {:5.2f} |'
             ' test ppl {:5.2f} | acc {:3.3f}\n'.
@@ -704,7 +728,7 @@ print('| end of epoch {:3d} | time: {:5.2f}s | test loss {:5.2f} | '
       format(epoch, (time.time() - epoch_start_time),
              test_loss, math.exp(test_loss), accuracy))
 print('-' * 89)
-with open("{}/log.txt".format(args.outf), 'a') as f:
+with open("{}/logs.txt".format(args.outf), 'a') as f:
     f.write('-' * 89)
     f.write('\n| end of epoch {:3d} | time: {:5.2f}s | test loss {:5.2f} |'
             ' test ppl {:5.2f} | acc {:3.3f}\n'.

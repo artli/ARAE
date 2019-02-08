@@ -544,13 +544,19 @@ def load_models(load_path, epoch, twodecoders=False):
                               nhidden=model_args['nhidden'],
                               ntokens=model_args['ntokens'],
                               nlayers=model_args['nlayers'],
-                              hidden_init=model_args['hidden_init'])
+                              noise_r=model_args['noise_r'],
+                              hidden_init=model_args['hidden_init'],
+                              dropout=model_args['dropout'],
+                              gpu=model_args['cuda'])
     else:
         autoencoder = Seq2Seq2Decoder(emsize=model_args['emsize'],
                                       nhidden=model_args['nhidden'],
                                       ntokens=model_args['ntokens'],
                                       nlayers=model_args['nlayers'],
-                                      hidden_init=model_args['hidden_init'])
+                                      noise_r=model_args['noise_r'],
+                                      hidden_init=model_args['hidden_init'],
+                                      dropout=model_args['dropout'],
+                                      gpu=model_args['cuda'])
 
     gan_gen = MLP_G(ninput=model_args['z_size'],
                     noutput=model_args['nhidden'],
@@ -558,16 +564,21 @@ def load_models(load_path, epoch, twodecoders=False):
     gan_disc = MLP_D(ninput=model_args['nhidden'],
                      noutput=1,
                      layers=model_args['arch_d'])
+    classifier = MLP_Classify(ninput=model_args['nhidden'],
+                              noutput=1,
+                              layers=model_args['arch_classify'])
 
     print('Loading models from' + load_path)
     ae_path = os.path.join(load_path, "autoencoder_model_{}.pt".format(epoch))
     gen_path = os.path.join(load_path, "gan_gen_model_{}.pt".format(epoch))
     disc_path = os.path.join(load_path, "gan_disc_model_{}.pt".format(epoch))
+    classifier_path = os.path.join(load_path, "classifier_model_{}.pt".format(epoch))
 
-    autoencoder.load_state_dict(torch.load(ae_path))
-    gan_gen.load_state_dict(torch.load(gen_path))
-    gan_disc.load_state_dict(torch.load(disc_path))
-    return model_args, idx2word, autoencoder, gan_gen, gan_disc
+    autoencoder.load_state_dict(torch.load(ae_path, map_location=lambda storage, loc: storage))
+    gan_gen.load_state_dict(torch.load(gen_path, map_location=lambda storage, loc: storage))
+    gan_disc.load_state_dict(torch.load(disc_path, map_location=lambda storage, loc: storage))
+    classifier.load_state_dict(torch.load(classifier_path, map_location=lambda storage, loc: storage))
+    return model_args, idx2word, autoencoder, gan_gen, gan_disc, classifier
 
 
 def generate(autoencoder, gan_gen, z, vocab, sample, maxlen):
