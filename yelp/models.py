@@ -175,7 +175,7 @@ class Seq2Seq2Decoder(nn.Module):
         # hidden = torch.div(hidden, norms.unsqueeze(1).expand_as(hidden))
 
         if noise and self.noise_r > 0:
-            gauss_noise = torch.normal(means=torch.zeros(hidden.size()),
+            gauss_noise = torch.normal(mean=torch.zeros(hidden.size()),
                                        std=self.noise_r)
             hidden = hidden + to_gpu(self.gpu, Variable(gauss_noise))
 
@@ -463,7 +463,7 @@ class Seq2Seq(nn.Module):
         # hidden = torch.div(hidden, norms.unsqueeze(1).expand_as(hidden))
 
         if noise and self.noise_r > 0:
-            gauss_noise = torch.normal(means=torch.zeros(hidden.size()),
+            gauss_noise = torch.normal(mean=torch.zeros(hidden.size()),
                                        std=self.noise_r)
             hidden = hidden + to_gpu(self.gpu, Variable(gauss_noise))
 

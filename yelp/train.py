@@ -255,7 +255,7 @@ def train_classifier(whichclass, batch):
     classify_loss = F.binary_cross_entropy(scores.squeeze(1), labels)
     classify_loss.backward()
     optimizer_classify.step()
-    classify_loss = classify_loss.cpu().data[0]
+    classify_loss = classify_loss.cpu().item()
 
     pred = scores.data.round().squeeze(1)
     accuracy = pred.eq(labels.data).float().mean()
@@ -318,7 +318,7 @@ def evaluate_autoencoder(whichdecoder, data_source, epoch):
             # accuracy
             max_vals1, max_indices1 = torch.max(masked_output, 1)
             all_accuracies += \
-                torch.mean(max_indices1.eq(masked_target).float()).data[0]
+                torch.mean(max_indices1.eq(masked_target).float()).item()
         
             max_values1, max_indices1 = torch.max(output, 2)
             max_indices2 = autoencoder.generate(2, hidden, maxlen=50)
@@ -330,7 +330,7 @@ def evaluate_autoencoder(whichdecoder, data_source, epoch):
             # accuracy
             max_vals2, max_indices2 = torch.max(masked_output, 1)
             all_accuracies += \
-                torch.mean(max_indices2.eq(masked_target).float()).data[0]
+                torch.mean(max_indices2.eq(masked_target).float()).item()
 
             max_values2, max_indices2 = torch.max(output, 2)
             max_indices1 = autoencoder.generate(1, hidden, maxlen=50)
@@ -357,7 +357,7 @@ def evaluate_autoencoder(whichdecoder, data_source, epoch):
                 f_trans.write(chars)
                 f_trans.write("\n")
 
-    return total_loss[0] / len(data_source), all_accuracies/bcnt
+    return total_loss.item() / len(data_source), all_accuracies/bcnt
 
 
 def evaluate_generator(whichdecoder, noise, epoch):
@@ -413,8 +413,8 @@ def train_ae(whichdecoder, batch, total_loss_ae, start_time, i):
     if i % args.log_interval == 0 and i > 0:
         probs = F.softmax(masked_output, dim=-1)
         max_vals, max_indices = torch.max(probs, 1)
-        accuracy = torch.mean(max_indices.eq(masked_target).float()).data[0]
-        cur_loss = total_loss_ae[0] / args.log_interval
+        accuracy = torch.mean(max_indices.eq(masked_target).float()).item()
+        cur_loss = total_loss_ae.item() / args.log_interval
         elapsed = time.time() - start_time
         print('| epoch {:3d} | {:5d}/{:5d} batches | ms/batch {:5.2f} | '
               'loss {:5.2f} | ppl {:8.2f} | acc {:8.2f}'
@@ -619,16 +619,16 @@ for epoch in range(1, args.epochs+1):
             print('[%d/%d][%d/%d] Loss_D: %.4f (Loss_D_real: %.4f '
                   'Loss_D_fake: %.4f) Loss_G: %.4f'
                   % (epoch, args.epochs, niter, len(train1_data),
-                     errD.data[0], errD_real.data[0],
-                     errD_fake.data[0], errG.data[0]))
+                     errD.item(), errD_real.item(),
+                     errD_fake.item(), errG.item()))
             print("Classify loss: {:5.2f} | Classify accuracy: {:3.3f}\n".format(
                     classify_loss, classify_acc))
             with open("{}/log.txt".format(args.outf), 'a') as f:
                 f.write('[%d/%d][%d/%d] Loss_D: %.4f (Loss_D_real: %.4f '
                         'Loss_D_fake: %.4f) Loss_G: %.4f\n'
                         % (epoch, args.epochs, niter, len(train1_data),
-                           errD.data[0], errD_real.data[0],
-                           errD_fake.data[0], errG.data[0]))
+                           errD.item(), errD_real.item(),
+                           errD_fake.item(), errG.item()))
                 f.write("Classify loss: {:5.2f} | Classify accuracy: {:3.3f}\n".format(
                         classify_loss, classify_acc))
 
