@@ -1,21 +1,20 @@
 import argparse
-import os
-import time
-import math
-import numpy as np
-import random
-import sys
 import json
+import math
+import os
+import random
+import shutil
+import time
 
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
+import torch.optim as optim
 from torch.autograd import Variable
 
+from models import Seq2Seq2Decoder, MLP_D, MLP_G, MLP_Classify
 from utils import to_gpu, Corpus, batchify
-from models import Seq2Seq2Decoder, Seq2Seq, MLP_D, MLP_G, MLP_Classify
-import shutil
 
 parser = argparse.ArgumentParser(description='ARAE for Yelp transfer')
 # Path Arguments
@@ -142,11 +141,11 @@ if torch.cuda.is_available():
 ###############################################################################
 
 label_ids = {"pos": 1, "neg": 0}
-id2label = {1:"pos", 0:"neg"}
+id2label = {1: "pos", 0: "neg"}
 
 # (Path to textfile, Name, Use4Vocab)
-datafiles = [(os.path.join(args.data_path, "valid1.txt"), "valid1", False),
-             (os.path.join(args.data_path, "valid2.txt"), "valid2", False),
+datafiles = [(os.path.join(args.data_path, "test1.txt"), "test1", False),
+             (os.path.join(args.data_path, "test2.txt"), "test2", False),
              (os.path.join(args.data_path, "train1.txt"), "train1", True),
              (os.path.join(args.data_path, "train2.txt"), "train2", True)]
 vocabdict = None
@@ -174,8 +173,8 @@ with open("{}/log.txt".format(args.outf), 'w') as f:
     f.write("\n\n")
 
 eval_batch_size = 100
-test1_data = batchify(corpus.data['valid1'], eval_batch_size, shuffle=False)
-test2_data = batchify(corpus.data['valid2'], eval_batch_size, shuffle=False)
+test1_data = batchify(corpus.data['test1'], eval_batch_size, shuffle=False)
+test2_data = batchify(corpus.data['test2'], eval_batch_size, shuffle=False)
 train1_data = batchify(corpus.data['train1'], args.batch_size, shuffle=True)
 train2_data = batchify(corpus.data['train2'], args.batch_size, shuffle=True)
 
@@ -187,13 +186,13 @@ print("Loaded data!")
 
 ntokens = len(corpus.dictionary.word2idx)
 autoencoder = Seq2Seq2Decoder(emsize=args.emsize,
-                      nhidden=args.nhidden,
-                      ntokens=ntokens,
-                      nlayers=args.nlayers,
-                      noise_r=args.noise_r,
-                      hidden_init=args.hidden_init,
-                      dropout=args.dropout,
-                      gpu=args.cuda)
+                              nhidden=args.nhidden,
+                              ntokens=ntokens,
+                              nlayers=args.nlayers,
+                              noise_r=args.noise_r,
+                              hidden_init=args.hidden_init,
+                              dropout=args.dropout,
+                              gpu=args.cuda)
 
 gan_gen = MLP_G(ninput=args.z_size, noutput=args.nhidden, layers=args.arch_g)
 gan_disc = MLP_D(ninput=args.nhidden, noutput=1, layers=args.arch_d)
@@ -226,6 +225,7 @@ if args.cuda:
     classifier = classifier.cuda()
     criterion_ce = criterion_ce.cuda()
 
+
 ###############################################################################
 # Training code
 ###############################################################################
@@ -247,7 +247,7 @@ def train_classifier(whichclass, batch):
 
     source, target, lengths = batch
     source = to_gpu(args.cuda, Variable(source))
-    labels = to_gpu(args.cuda, Variable(torch.zeros(source.size(0)).fill_(whichclass-1)))
+    labels = to_gpu(args.cuda, Variable(torch.zeros(source.size(0)).fill_(whichclass - 1)))
 
     # Train
     code = autoencoder(0, source, lengths, noise=False, encode_only=True).detach()
@@ -274,7 +274,7 @@ def classifier_regularize(whichclass, batch):
     source, target, lengths = batch
     source = to_gpu(args.cuda, Variable(source))
     target = to_gpu(args.cuda, Variable(target))
-    flippedclass = abs(2-whichclass)
+    flippedclass = abs(2 - whichclass)
     labels = to_gpu(args.cuda, Variable(torch.zeros(source.size(0)).fill_(flippedclass)))
 
     # Train
@@ -319,7 +319,7 @@ def evaluate_autoencoder(whichdecoder, data_source, epoch):
             max_vals1, max_indices1 = torch.max(masked_output, 1)
             all_accuracies += \
                 torch.mean(max_indices1.eq(masked_target).float()).item()
-        
+
             max_values1, max_indices1 = torch.max(output, 2)
             max_indices2 = autoencoder.generate(2, hidden, maxlen=50)
         else:
@@ -334,13 +334,13 @@ def evaluate_autoencoder(whichdecoder, data_source, epoch):
 
             max_values2, max_indices2 = torch.max(output, 2)
             max_indices1 = autoencoder.generate(1, hidden, maxlen=50)
-        
-        total_loss += criterion_ce(masked_output/args.temp, masked_target).data
+
+        total_loss += criterion_ce(masked_output / args.temp, masked_target).data
         bcnt += 1
 
         aeoutf_from = "{}/{}_output_decoder_{}_from.txt".format(args.outf, epoch, whichdecoder)
         aeoutf_tran = "{}/{}_output_decoder_{}_tran.txt".format(args.outf, epoch, whichdecoder)
-        with open(aeoutf_from, 'w') as f_from, open(aeoutf_tran,'w') as f_trans:
+        with open(aeoutf_from, 'a+') as f_from, open(aeoutf_tran, 'a+') as f_trans:
             max_indices1 = \
                 max_indices1.view(output.size(0), -1).data.cpu().numpy()
             max_indices2 = \
@@ -400,7 +400,7 @@ def train_ae(whichdecoder, batch, total_loss_ae, start_time, i):
     output = autoencoder(whichdecoder, source, lengths, noise=True)
     flat_output = output.view(-1, ntokens)
     masked_output = flat_output.masked_select(output_mask).view(-1, ntokens)
-    loss = criterion_ce(masked_output/args.temp, masked_target)
+    loss = criterion_ce(masked_output / args.temp, masked_target)
     loss.backward()
 
     # `clip_grad_norm` to prevent exploding gradient in RNNs / LSTMs
@@ -455,11 +455,15 @@ def grad_hook(grad):
 
 
 ''' Steal from https://github.com/caogang/wgan-gp/blob/master/gan_cifar10.py '''
+
+
 def calc_gradient_penalty(netD, real_data, fake_data):
     bsz = real_data.size(0)
     alpha = torch.rand(bsz, 1)
     alpha = alpha.expand(bsz, real_data.size(1))  # only works for 2D XXX
     alpha = alpha.cuda()
+
+    fake_data = fake_data[:real_data.size()[0]]
     interpolates = alpha * real_data + ((1 - alpha) * fake_data)
     interpolates = Variable(interpolates, requires_grad=True)
     disc_interpolates = netD(interpolates)
@@ -543,10 +547,10 @@ niter_gan = 1
 fixed_noise = to_gpu(args.cuda,
                      Variable(torch.ones(args.batch_size, args.z_size)))
 fixed_noise.data.normal_(0, 1)
-one = to_gpu(args.cuda, torch.FloatTensor([1]))
+one = to_gpu(args.cuda, torch.tensor(1.0))
 mone = one * -1
 
-for epoch in range(1, args.epochs+1):
+for epoch in range(1, args.epochs + 1):
     # update gan training schedule
     if epoch in gan_schedule:
         niter_gan += 1
@@ -574,7 +578,7 @@ for epoch in range(1, args.epochs+1):
                 train_ae(1, train1_data[niter], total_loss_ae1, start_time, niter)
             total_loss_ae2, _ = \
                 train_ae(2, train2_data[niter], total_loss_ae2, start_time, niter)
-            
+
             # train classifier ----------------------------
             classify_loss1, classify_acc1 = train_classifier(1, train1_data[niter])
             classify_loss2, classify_acc2 = train_classifier(2, train2_data[niter])
@@ -593,10 +597,10 @@ for epoch in range(1, args.epochs+1):
             for i in range(args.niters_gan_d):
                 # feed a seen sample within this epoch; good for early training
                 if i % 2 == 0:
-                    batch = train1_data[random.randint(0, len(train1_data)-1)]
+                    batch = train1_data[random.randint(0, len(train1_data) - 1)]
                     whichdecoder = 1
                 else:
-                    batch = train2_data[random.randint(0, len(train2_data)-1)]
+                    batch = train2_data[random.randint(0, len(train2_data) - 1)]
                     whichdecoder = 2
                 errD, errD_real, errD_fake = train_gan_d(whichdecoder, batch)
 
@@ -607,10 +611,10 @@ for epoch in range(1, args.epochs+1):
             # train autoencoder from d
             for i in range(args.niters_gan_ae):
                 if i % 2 == 0:
-                    batch = train1_data[random.randint(0, len(train1_data)-1)]
+                    batch = train1_data[random.randint(0, len(train1_data) - 1)]
                     whichdecoder = 1
                 else:
-                    batch = train2_data[random.randint(0, len(train2_data)-1)]
+                    batch = train2_data[random.randint(0, len(train2_data) - 1)]
                     whichdecoder = 2
                 errD_ = train_gan_d_into_ae(whichdecoder, batch)
 
@@ -622,7 +626,7 @@ for epoch in range(1, args.epochs+1):
                      errD.item(), errD_real.item(),
                      errD_fake.item(), errG.item()))
             print("Classify loss: {:5.2f} | Classify accuracy: {:3.3f}\n".format(
-                    classify_loss, classify_acc))
+                classify_loss, classify_acc))
             with open("{}/log.txt".format(args.outf), 'a') as f:
                 f.write('[%d/%d][%d/%d] Loss_D: %.4f (Loss_D_real: %.4f '
                         'Loss_D_fake: %.4f) Loss_G: %.4f\n'
@@ -630,12 +634,11 @@ for epoch in range(1, args.epochs+1):
                            errD.item(), errD_real.item(),
                            errD_fake.item(), errG.item()))
                 f.write("Classify loss: {:5.2f} | Classify accuracy: {:3.3f}\n".format(
-                        classify_loss, classify_acc))
+                    classify_loss, classify_acc))
 
             # exponentially decaying noise on autoencoder
             autoencoder.noise_r = \
-                autoencoder.noise_r*args.noise_anneal
-
+                autoencoder.noise_r * args.noise_anneal
 
     # end of epoch ----------------------------
     # evaluation
@@ -654,7 +657,7 @@ for epoch in range(1, args.epochs+1):
                        test_loss, math.exp(test_loss), accuracy))
         f.write('-' * 89)
         f.write('\n')
-    
+
     test_loss, accuracy = evaluate_autoencoder(2, test2_data[:1000], epoch)
     print('-' * 89)
     print('| end of epoch {:3d} | time: {:5.2f}s | test loss {:5.2f} | '
@@ -677,9 +680,8 @@ for epoch in range(1, args.epochs+1):
     # shuffle between epochs
     train1_data = batchify(corpus.data['train1'], args.batch_size, shuffle=True)
     train2_data = batchify(corpus.data['train2'], args.batch_size, shuffle=True)
-    
-    
-test_loss, accuracy = evaluate_autoencoder(1, test1_data, epoch+1)
+
+test_loss, accuracy = evaluate_autoencoder(1, test1_data, epoch + 1)
 print('-' * 89)
 print('| end of epoch {:3d} | time: {:5.2f}s | test loss {:5.2f} | '
       'test ppl {:5.2f} | acc {:3.3f}'.
@@ -695,7 +697,7 @@ with open("{}/log.txt".format(args.outf), 'a') as f:
     f.write('-' * 89)
     f.write('\n')
 
-test_loss, accuracy = evaluate_autoencoder(2, test2_data, epoch+1)
+test_loss, accuracy = evaluate_autoencoder(2, test2_data, epoch + 1)
 print('-' * 89)
 print('| end of epoch {:3d} | time: {:5.2f}s | test loss {:5.2f} | '
       'test ppl {:5.2f} | acc {:3.3f}'.
