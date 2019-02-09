@@ -1,13 +1,13 @@
+import json
+import os
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-
 from utils import to_gpu
-import json
-import os
-import numpy as np
 
 
 class MLP_Classify(nn.Module):
@@ -20,23 +20,23 @@ class MLP_Classify(nn.Module):
         layer_sizes = [ninput] + [int(x) for x in layers.split('-')]
         self.layers = []
 
-        for i in range(len(layer_sizes)-1):
-            layer = nn.Linear(layer_sizes[i], layer_sizes[i+1])
+        for i in range(len(layer_sizes) - 1):
+            layer = nn.Linear(layer_sizes[i], layer_sizes[i + 1])
             self.layers.append(layer)
-            self.add_module("layer"+str(i+1), layer)
+            self.add_module("layer" + str(i + 1), layer)
 
             # No batch normalization in first layer
             if i != 0:
-                bn = nn.BatchNorm1d(layer_sizes[i+1])
+                bn = nn.BatchNorm1d(layer_sizes[i + 1])
                 self.layers.append(bn)
-                self.add_module("bn"+str(i+1), bn)
+                self.add_module("bn" + str(i + 1), bn)
 
             self.layers.append(activation)
-            self.add_module("activation"+str(i+1), activation)
+            self.add_module("activation" + str(i + 1), activation)
 
         layer = nn.Linear(layer_sizes[-1], noutput)
         self.layers.append(layer)
-        self.add_module("layer"+str(len(self.layers)), layer)
+        self.add_module("layer" + str(len(self.layers)), layer)
 
         self.init_weights()
 
@@ -83,17 +83,17 @@ class Seq2Seq2Decoder(nn.Module):
                                dropout=dropout,
                                batch_first=True)
 
-        decoder_input_size = emsize+nhidden
+        decoder_input_size = emsize + nhidden
         self.decoder1 = nn.LSTM(input_size=decoder_input_size,
-                               hidden_size=nhidden,
-                               num_layers=1,
-                               dropout=dropout,
-                               batch_first=True)
+                                hidden_size=nhidden,
+                                num_layers=1,
+                                dropout=dropout,
+                                batch_first=True)
         self.decoder2 = nn.LSTM(input_size=decoder_input_size,
-                               hidden_size=nhidden,
-                               num_layers=1,
-                               dropout=dropout,
-                               batch_first=True)
+                                hidden_size=nhidden,
+                                num_layers=1,
+                                dropout=dropout,
+                                batch_first=True)
 
         # Initialize Linear Transformation
         self.linear = nn.Linear(nhidden, ntokens)
@@ -168,7 +168,7 @@ class Seq2Seq2Decoder(nn.Module):
 
         # normalize to unit ball (l2 norm of 1) - p=2, dim=1
         norms = torch.norm(hidden, 2, 1)
-        
+
         # For older versions of PyTorch use:
         hidden = torch.div(hidden, norms.unsqueeze(1).expand_as(hidden))
         # For newest version of PyTorch (as of 8/25) use this:
@@ -244,14 +244,14 @@ class Seq2Seq2Decoder(nn.Module):
             else:
                 output, state = self.decoder2(inputs, state)
             overvocab = self.linear(output.squeeze(1))
-            
+
             if not sample:
                 vals, indices = torch.max(overvocab, 1)
                 indices = indices.unsqueeze(1)
             else:
                 assert 1 == 0
                 # sampling
-                probs = F.softmax(overvocab/temp)
+                probs = F.softmax(overvocab / temp)
                 indices = torch.multinomial(probs, 1)
 
             all_indices.append(indices)
@@ -277,23 +277,23 @@ class MLP_D(nn.Module):
         layer_sizes = [ninput] + [int(x) for x in layers.split('-')]
         self.layers = []
 
-        for i in range(len(layer_sizes)-1):
-            layer = nn.Linear(layer_sizes[i], layer_sizes[i+1])
+        for i in range(len(layer_sizes) - 1):
+            layer = nn.Linear(layer_sizes[i], layer_sizes[i + 1])
             self.layers.append(layer)
-            self.add_module("layer"+str(i+1), layer)
+            self.add_module("layer" + str(i + 1), layer)
 
             # No batch normalization after first layer
             if i != 0:
-                bn = nn.BatchNorm1d(layer_sizes[i+1], eps=1e-05, momentum=0.1)
+                bn = nn.BatchNorm1d(layer_sizes[i + 1], eps=1e-05, momentum=0.1)
                 self.layers.append(bn)
-                self.add_module("bn"+str(i+1), bn)
+                self.add_module("bn" + str(i + 1), bn)
 
             self.layers.append(activation)
-            self.add_module("activation"+str(i+1), activation)
+            self.add_module("activation" + str(i + 1), activation)
 
         layer = nn.Linear(layer_sizes[-1], noutput)
         self.layers.append(layer)
-        self.add_module("layer"+str(len(self.layers)), layer)
+        self.add_module("layer" + str(len(self.layers)), layer)
 
         self.init_weights()
 
@@ -323,21 +323,21 @@ class MLP_G(nn.Module):
         layer_sizes = [ninput] + [int(x) for x in layers.split('-')]
         self.layers = []
 
-        for i in range(len(layer_sizes)-1):
-            layer = nn.Linear(layer_sizes[i], layer_sizes[i+1])
+        for i in range(len(layer_sizes) - 1):
+            layer = nn.Linear(layer_sizes[i], layer_sizes[i + 1])
             self.layers.append(layer)
-            self.add_module("layer"+str(i+1), layer)
+            self.add_module("layer" + str(i + 1), layer)
 
-            bn = nn.BatchNorm1d(layer_sizes[i+1], eps=1e-05, momentum=0.1)
+            bn = nn.BatchNorm1d(layer_sizes[i + 1], eps=1e-05, momentum=0.1)
             self.layers.append(bn)
-            self.add_module("bn"+str(i+1), bn)
+            self.add_module("bn" + str(i + 1), bn)
 
             self.layers.append(activation)
-            self.add_module("activation"+str(i+1), activation)
+            self.add_module("activation" + str(i + 1), activation)
 
         layer = nn.Linear(layer_sizes[-1], noutput)
         self.layers.append(layer)
-        self.add_module("layer"+str(len(self.layers)), layer)
+        self.add_module("layer" + str(len(self.layers)), layer)
 
         self.init_weights()
 
@@ -382,7 +382,7 @@ class Seq2Seq(nn.Module):
                                dropout=dropout,
                                batch_first=True)
 
-        decoder_input_size = emsize+nhidden
+        decoder_input_size = emsize + nhidden
         self.decoder = nn.LSTM(input_size=decoder_input_size,
                                hidden_size=nhidden,
                                num_layers=1,
@@ -456,7 +456,7 @@ class Seq2Seq(nn.Module):
 
         # normalize to unit ball (l2 norm of 1) - p=2, dim=1
         norms = torch.norm(hidden, 2, 1)
-        
+
         # For older versions of PyTorch use:
         hidden = torch.div(hidden, norms.expand_as(hidden))
         # For newest version of PyTorch (as of 8/25) use this:
@@ -522,7 +522,7 @@ class Seq2Seq(nn.Module):
                 vals, indices = torch.max(overvocab, 1)
             else:
                 # sampling
-                probs = F.softmax(overvocab/temp)
+                probs = F.softmax(overvocab / temp)
                 indices = torch.multinomial(probs, 1)
 
             all_indices.append(indices)
@@ -548,10 +548,10 @@ def load_models(load_path, epoch, twodecoders=False):
                               hidden_init=model_args['hidden_init'])
     else:
         autoencoder = Seq2Seq2Decoder(emsize=model_args['emsize'],
-                              nhidden=model_args['nhidden'],
-                              ntokens=model_args['ntokens'],
-                              nlayers=model_args['nlayers'],
-                              hidden_init=model_args['hidden_init'])
+                                      nhidden=model_args['nhidden'],
+                                      ntokens=model_args['ntokens'],
+                                      nlayers=model_args['nlayers'],
+                                      hidden_init=model_args['hidden_init'])
 
     gan_gen = MLP_G(ninput=model_args['z_size'],
                     noutput=model_args['nhidden'],
@@ -560,7 +560,7 @@ def load_models(load_path, epoch, twodecoders=False):
                      noutput=1,
                      layers=model_args['arch_d'])
 
-    print('Loading models from'+load_path)
+    print('Loading models from' + load_path)
     ae_path = os.path.join(load_path, "autoencoder_model_{}.pt".format(epoch))
     gen_path = os.path.join(load_path, "gan_gen_model_{}.pt".format(epoch))
     disc_path = os.path.join(load_path, "gan_disc_model_{}.pt".format(epoch))

@@ -1,12 +1,16 @@
 import os
-import torch
-import numpy as np
+import math
 import random
 
-PAD_WORD="<pad>"
-EOS_WORD="<eos>"
-BOS_WORD="<bos>"
-UNK="<unk>"
+import numpy as np
+import torch
+
+
+PAD_WORD = "<pad>"
+EOS_WORD = "<eos>"
+BOS_WORD = "<bos>"
+UNK = "<unk>"
+
 
 def load_kenlm():
     global kenlm
@@ -47,7 +51,7 @@ class Dictionary(object):
         if cnt:
             # prune by count
             self.pruned_vocab = \
-                    {pair[0]: pair[1] for pair in vocab_list if pair[1] > k}
+                {pair[0]: pair[1] for pair in vocab_list if pair[1] > k}
         else:
             # prune by most frequently seen words
             vocab_list.sort(key=lambda x: (x[1], x[0]), reverse=True)
@@ -86,7 +90,6 @@ class Corpus(object):
 
         for path, name, _ in datafiles:
             self.data[name] = self.tokenize(path)
-
 
     def make_vocab(self):
         for path in self.forvocab:
@@ -131,16 +134,16 @@ def batchify(data, bsz, shuffle=False, gpu=False):
     if shuffle:
         random.shuffle(data)
 
-    nbatch = len(data) // bsz
+    nbatch = int(math.ceil(len(data) / bsz))
     batches = []
 
     for i in range(nbatch):
         # Pad batches to maximum sequence length in batch
-        batch = data[i*bsz:(i+1)*bsz]
-        
+        batch = data[i * bsz: (i + 1) * bsz]
+
         # subtract 1 from lengths b/c includes BOTH starts & end symbols
         words = batch
-        lengths = [len(x)-1 for x in words]
+        lengths = [len(x) - 1 for x in words]
 
         # sort items by length (decreasing)
         batch, lengths = length_sort(batch, lengths)
@@ -154,7 +157,7 @@ def batchify(data, bsz, shuffle=False, gpu=False):
         # find length to pad to
         maxlen = max(lengths)
         for x, y in zip(source, target):
-            zeros = (maxlen-len(x))*[0]
+            zeros = (maxlen - len(x)) * [0]
             x += zeros
             y += zeros
 
@@ -193,10 +196,10 @@ def train_ngram_lm(kenlm_path, data_path, output_path, N):
     """
     # create .arpa file of n-grams
     curdir = os.path.abspath(os.path.curdir)
-    
-    command = "bin/lmplz -o "+str(N)+" <"+os.path.join(curdir, data_path) + \
-              " >"+os.path.join(curdir, output_path)
-    os.system("cd "+os.path.join(kenlm_path, 'build')+" && "+command)
+
+    command = "bin/lmplz -o " + str(N) + " <" + os.path.join(curdir, data_path) + \
+              " >" + os.path.join(curdir, output_path)
+    os.system("cd " + os.path.join(kenlm_path, 'build') + " && " + command)
 
     load_kenlm()
     # create language model
@@ -217,5 +220,5 @@ def get_ppl(lm, sentences):
         word_count = len(words)
         total_wc += word_count
         total_nll += score
-    ppl = 10**-(total_nll/total_wc)
+    ppl = 10 ** -(total_nll / total_wc)
     return ppl
