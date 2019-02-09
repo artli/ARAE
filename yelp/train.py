@@ -233,11 +233,12 @@ if args.cuda:
 
 def save_model():
     print("Saving models")
-    with open('{}/autoencoder_model.pt'.format(args.outf), 'wb') as f:
+    epoch_num = epoch - epoch % 10
+    with open('{}/autoencoder_model_{:03d}.pt'.format(args.outf, epoch_num), 'wb') as f:
         torch.save(autoencoder.state_dict(), f)
-    with open('{}/gan_gen_model.pt'.format(args.outf), 'wb') as f:
+    with open('{}/gan_gen_model_{:03d}.pt'.format(args.outf, epoch_num), 'wb') as f:
         torch.save(gan_gen.state_dict(), f)
-    with open('{}/gan_disc_model.pt'.format(args.outf), 'wb') as f:
+    with open('{}/gan_disc_model_{:03d}.pt'.format(args.outf, epoch_num), 'wb') as f:
         torch.save(gan_disc.state_dict(), f)
 
 
@@ -674,6 +675,8 @@ for epoch in range(1, args.epochs + 1):
 
     evaluate_generator(1, fixed_noise, "end_of_epoch_{}".format(epoch))
     evaluate_generator(2, fixed_noise, "end_of_epoch_{}".format(epoch))
+
+    save_model()
 
     # shuffle between epochs
     train1_data = batchify(corpus.data['train1'], args.batch_size, shuffle=True)
