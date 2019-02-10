@@ -29,7 +29,7 @@ def to_gpu(gpu, var):
 
 
 class Dictionary:
-    _FIRST_WORDS = [PAD_WORD, BOS_WORD, EOS_WORD, UNK]
+    _FIRST_WORDS = PAD_WORD, BOS_WORD, EOS_WORD, UNK
 
     def __init__(self, word2idx):
         self.word2idx = word2idx
@@ -47,7 +47,7 @@ class Dictionary:
                         counter[word] += 1
 
         words, _ = zip(*counter.most_common(max_size))
-        word2idx = dict(cls._FIRST_WORDS + words)
+        word2idx = dict(zip(cls._FIRST_WORDS + words, range(len(cls._FIRST_WORDS) + len(words))))
         return cls(word2idx)
 
     @classmethod

@@ -163,7 +163,7 @@ class Data:
 
         if dictionary is None:
             dictionary = Dictionary.from_files(
-                to_path_dict(train_names), lowercase=config.lowercase, max_size=config.vocab_size)
+                to_path_dict(train_names).values(), lowercase=config.lowercase, max_size=config.vocab_size)
             dictionary.save(config.working_dir)
         self.dictionary = dictionary
 
@@ -257,7 +257,7 @@ def log_epoch_end(epoch, elapsed, autoencoder_results: Iterable[AutoencoderEvalu
     if epoch is None:
         description = 'Final evaluation'
     else:
-        description = 'Epoch {:03d}'
+        description = 'Epoch {:03d}'.format(epoch)
     logging.info('{} ended in {:5.2f} seconds'.format(description, elapsed))
     for number, result in enumerate(autoencoder_results, start=1):
         logging.info('Autoencoder {} evaluation:\ttest loss: {:5.2f},\ttest ppl {:5.2f},\tacc {:3.3f}'
@@ -443,10 +443,10 @@ class Trainer:
                 self.models.autoencoder.noise_r = \
                     self.models.autoencoder.noise_r * self.config.noise_anneal
 
-        self._on_epoch_end(context.epoch, (self.data.test1_data[:1000], self.data.test2_data[:1000]))
+        self._on_epoch_end(context, (self.data.test1_data[:1000], self.data.test2_data[:1000]))
 
-        self.evaluate_generator(1, context.evaluation_noise, "end_of_epoch_{}".format(context.epoch))
-        self.evaluate_generator(2, context.evaluation_noise, "end_of_epoch_{}".format(context.epoch))
+        self.evaluate_generator(1, context.evaluation_noise, context.epoch)
+        self.evaluate_generator(2, context.evaluation_noise, context.epoch)
 
         logging.info('Saving models into ' + self.config.working_dir)
         self.models.save_state(self.config.working_dir, context.epoch)
@@ -490,7 +490,7 @@ class Trainer:
         classify_reg_loss = F.binary_cross_entropy(scores.squeeze(1), labels)
         classify_reg_loss.backward()
 
-        torch.nn.utils.clip_grad_norm(self.models.autoencoder.parameters(), self.config.clip)
+        torch.nn.utils.clip_grad_norm_(self.models.autoencoder.parameters(), self.config.clip)
         self.models.autoencoder_opt.step()
 
         return classify_reg_loss
@@ -648,7 +648,7 @@ class Trainer:
         """ Stolen from https://github.com/caogang/wgan-gp/blob/master/gan_cifar10.py """
         bsz = real_data.size(0)
         alpha = torch.rand(bsz, 1)
-        alpha = alpha.expand(bsz, real_data.size(1))  # only works for 2D XXX
+        alpha = alpha.expand(bsz, real_data.size(1))  # only works for 2D
         alpha = to_gpu(self.config.cuda, alpha)
         interpolates = alpha * real_data + ((1 - alpha) * fake_data)
         interpolates = Variable(interpolates, requires_grad=True)
@@ -681,7 +681,7 @@ class Trainer:
 
         # negative samples ----------------------------
         # generate fake codes
-        noise = to_gpu(self.config.cuda, Variable(torch.ones(self.config.batch_size, self.models.config.z_size)))
+        noise = to_gpu(self.config.cuda, Variable(torch.ones(source.size(0), self.models.config.z_size)))
         noise.data.normal_(0, 1)
 
         # loss / backprop
@@ -709,23 +709,53 @@ class Trainer:
         real_hidden.register_hook(lambda grad: grad * self.config.grad_lambda)
         errD_real = self.models.discriminator(real_hidden)
         errD_real.backward(context.mone)
-        torch.nn.utils.clip_grad_norm(self.models.autoencoder.parameters(), self.config.clip)
+        torch.nn.utils.clip_grad_norm_(self.models.autoencoder.parameters(), self.config.clip)
 
         self.models.autoencoder_opt.step()
 
         return errD_real
 
 
+def get_answer(prompt):
+    answer = input(prompt).lower()
+    if answer in ('y', 'yes'):
+        return True
+    elif answer in ('n', 'no'):
+        return False
+    else:
+        return None
+
+
+def set_up_working_dir(working_dir):
+    patterns = 'texts/*.txt', 'models/*.pt', '*.json'
+    conflicting_paths = [
+        path for pattern in patterns
+        for path in glob.glob(os.path.join(working_dir, pattern))]
+    if conflicting_paths:
+        answer = None
+        while answer is None:
+            answer = get_answer(
+                'There are training-related files in the working directory ({}). Use the --load_models flag to'
+                ' reuse them. Are you sure you want to delete them and start from scratch? (y/n) '.format(working_dir))
+        if not answer:
+            print('Aborting due to non-empty working directory...', file=sys.stderr)
+            sys.exit(1)
+        for path in conflicting_paths:
+            os.remove(path)
+    os.makedirs(os.path.join(working_dir, 'models'), exist_ok=True)
+    os.makedirs(os.path.join(working_dir, 'texts'), exist_ok=True)
+
+
 def set_up_logging(working_dir):
     format_string = '%(asctime)s - %(levelname)s - %(message)s'
     formatter = logging.Formatter(format_string)
 
-    stderr = logging.StreamHandler()
-    stderr.setLevel(logging.INFO)
-    stderr.setFormatter(formatter)
+    file_handler = logging.FileHandler('{}/log.txt'.format(working_dir))
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(formatter)
 
-    logging.basicConfig(level=logging.INFO, format=format_string, filename='{}/log.txt'.format(working_dir))
-    logging.getLogger('').addHandler(stderr)
+    logging.basicConfig(level=logging.INFO, format=format_string)
+    logging.getLogger('').addHandler(file_handler)
 
 
 class TextOperations:
@@ -781,6 +811,8 @@ def main():
     if args.mode != 'train' and not args.load_models:
         print('--load_models is required in all modes except "train"', file=sys.stderr)
         sys.exit(1)
+    if not args.load_models:
+        set_up_working_dir(args.working_dir)
     set_up_logging(args.working_dir)
     logging.info('train.py launched with args: ' + str(vars(args)))
     with open('{}/args.json'.format(args.working_dir), 'w') as f:
