@@ -1,9 +1,14 @@
+import json
 import os
+import logging
 import math
 import random
+import string
+from collections import Counter
 
 import numpy as np
 import torch
+from nltk import word_tokenize, sent_tokenize
 
 
 PAD_WORD = "<pad>"
@@ -23,110 +28,109 @@ def to_gpu(gpu, var):
     return var
 
 
-class Dictionary(object):
-    def __init__(self, word2idx=None):
-        if word2idx is None:
-            self.word2idx = {}
-            self.idx2word = {}
-            self.word2idx[PAD_WORD] = 0
-            self.word2idx[BOS_WORD] = 1
-            self.word2idx[EOS_WORD] = 2
-            self.word2idx[UNK] = 3
-            self.wordcounts = {}
-        else:
-            self.word2idx = word2idx
-            self.idx2word = {v: k for k, v in word2idx.items()}
+class Dictionary:
+    _FIRST_WORDS = [PAD_WORD, BOS_WORD, EOS_WORD, UNK]
 
-    # to track word counts
-    def add_word(self, word):
-        if word not in self.wordcounts:
-            self.wordcounts[word] = 1
-        else:
-            self.wordcounts[word] += 1
+    def __init__(self, word2idx):
+        self.word2idx = word2idx
+        self.idx2word = {v: k for k, v in word2idx.items()}
 
-    # prune vocab based on count k cutoff or most frequently seen k words
-    def prune_vocab(self, k=5, cnt=False):
-        # get all words and their respective counts
-        vocab_list = [(word, count) for word, count in self.wordcounts.items()]
-        if cnt:
-            # prune by count
-            self.pruned_vocab = \
-                {pair[0]: pair[1] for pair in vocab_list if pair[1] > k}
-        else:
-            # prune by most frequently seen words
-            vocab_list.sort(key=lambda x: (x[1], x[0]), reverse=True)
-            k = min(k, len(vocab_list))
-            self.pruned_vocab = [pair[0] for pair in vocab_list[:k]]
-        # sort to make vocabulary determistic
-        self.pruned_vocab.sort()
+    @classmethod
+    def from_files(cls, filenames, lowercase=True, max_size=None):
+        counter = Counter()
+        for path in filenames:
+            with open(path) as f:
+                for line in f:
+                    if lowercase:
+                        line = line.lower()
+                    for word in line.strip().split(' '):
+                        counter[word] += 1
 
-        # add all chosen words to new vocabulary/dict
-        for word in self.pruned_vocab:
-            if word not in self.word2idx:
-                self.word2idx[word] = len(self.word2idx)
-        print("Original vocab {}; Pruned to {}".
-              format(len(self.wordcounts), len(self.word2idx)))
-        self.idx2word = {v: k for k, v in self.word2idx.items()}
+        words, _ = zip(*counter.most_common(max_size))
+        word2idx = dict(cls._FIRST_WORDS + words)
+        return cls(word2idx)
+
+    @classmethod
+    def load(cls, working_dir):
+        with open('{}/vocab.json'.format(working_dir)) as f:
+            word2idx = json.load(f)
+        return cls(word2idx)
+
+    def save(self, working_dir):
+        with open('{}/vocab.json'.format(working_dir), 'w') as f:
+            json.dump(self.word2idx, f)
 
     def __len__(self):
         return len(self.word2idx)
 
 
-class Corpus(object):
-    def __init__(self, datafiles, maxlen, vocab_size=11000, lowercase=False, vocab=None, debug=False):
-        self.dictionary = Dictionary(vocab)
+class Preprocessor:
+    def __init__(self, dictionary: Dictionary):
+        self.dictionary = dictionary
+
+    def words_to_ids(self, sentence, maxlen=0):
+        if maxlen > 0:
+            sentence = sentence[:maxlen]
+        words = [BOS_WORD] + sentence + [EOS_WORD]
+        vocab = self.dictionary.word2idx
+        unk_id = vocab[UNK]
+        return [vocab.get(word, unk_id) for word in words]
+
+    def text_to_ids(self, text, maxlen=0):
+        text = text.lower()
+        sentences = [word_tokenize(sentence) for sentence in sent_tokenize(text)]
+        return [self.words_to_ids(sentence, maxlen=maxlen) for sentence in sentences]
+
+    def text_to_batch(self, text, maxlen=0):
+        encoded = self.text_to_ids(text, maxlen=maxlen)
+        return batchify(encoded, len(encoded))[0]
+
+    def batch_to_sentences(self, batch):
+        sentences = [[self.dictionary.idx2word[id] for id in sentence]
+                     for sentence in batch]
+        for sentence in sentences:
+            if EOS_WORD in sentence:
+                sentence[sentence.index(EOS_WORD):] = []
+        return sentences
+
+    def sentence_to_text(self, sentence):
+        to_join = []
+        for token in sentence:
+            if not to_join:
+                token = token.capitalize()
+            if token not in string.punctuation and '\'' not in token:
+                to_join.append(' ')
+            to_join.append(token)
+        return ''.join(to_join).strip()
+
+    def batch_to_text(self, batch):
+        return ' '.join(map(self.sentence_to_text, self.batch_to_sentences(batch)))
+
+
+class Corpus:
+    def __init__(self, source_paths: dict, maxlen, preprocessor: Preprocessor, lowercase=False):
         self.maxlen = maxlen
         self.lowercase = lowercase
-        self.vocab_size = vocab_size
-        self.datafiles = datafiles
-        self.forvocab = []
-        self.data = {}
+        self.data = {
+            name: self._tokenize(path, preprocessor)
+            for name, path in source_paths.items()}
 
-        if vocab is None:
-            for path, name, fvocab in datafiles:
-                if fvocab or debug:
-                    self.forvocab.append(path)
-            self.make_vocab()
-
-        for path, name, _ in datafiles:
-            self.data[name] = self.tokenize(path)
-
-    def make_vocab(self):
-        for path in self.forvocab:
-            assert os.path.exists(path)
-            # Add words to the dictionary
-            with open(path, 'r') as f:
-                for line in f:
-                    L = line.lower() if self.lowercase else line
-                    words = L.strip().split(" ")
-                    for word in words:
-                        self.dictionary.add_word(word)
-
-        # prune the vocabulary
-        self.dictionary.prune_vocab(k=self.vocab_size, cnt=False)
-
-    def tokenize(self, path):
-        """Tokenizes a text file."""
+    def _tokenize(self, path, preprocessor: Preprocessor):
         dropped = 0
-        with open(path, 'r') as f:
+        with open(path) as f:
             linecount = 0
             lines = []
             for line in f:
                 linecount += 1
-                L = line.lower() if self.lowercase else line
-                words = L.strip().split(" ")
-                if self.maxlen > 0 and len(words) > self.maxlen:
+                if self.lowercase:
+                    line = line.lower()
+                words = line.strip().split(' ')
+                if len(words) > self.maxlen > 0:
                     dropped += 1
                     continue
-                words = [BOS_WORD] + words + [EOS_WORD]
-                # vectorize
-                vocab = self.dictionary.word2idx
-                unk_idx = vocab[UNK]
-                indices = [vocab[w] if w in vocab else unk_idx for w in words]
-                lines.append(indices)
+                lines.append(preprocessor.words_to_ids(words))
 
-        print("Number of sentences dropped from {}: {} out of {} total".
-              format(path, dropped, linecount))
+        logging.info('Dropped {} sentences out of {} from {}'.format(dropped, linecount, path))
         return lines
 
 
@@ -165,7 +169,6 @@ def batchify(data, bsz, shuffle=False, gpu=False):
         target = torch.LongTensor(np.array(target)).view(-1)
 
         batches.append((source, target, lengths))
-    print('{} batches'.format(len(batches)))
     return batches
 
 
