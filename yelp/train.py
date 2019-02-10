@@ -209,8 +209,7 @@ class ModelsConfig(NamedTuple, NamedTupleFromArgs):
 
 
 class Models:
-    # MODEL_NAMES = 'autoencoder', 'generator', 'discriminator', 'classifier'
-    MODEL_NAMES = 'autoencoder', 'generator', 'discriminator'
+    MODEL_NAMES = 'autoencoder', 'generator', 'discriminator', 'classifier'
 
     def __init__(self, config: ModelsConfig):
         self.config = config
@@ -220,7 +219,7 @@ class Models:
             noise_r=config.noise_r, hidden_init=config.hidden_init, dropout=config.dropout, gpu=config.cuda)
         self.generator = MLP_G(ninput=config.z_size, noutput=config.nhidden, layers=config.arch_g)
         self.discriminator = MLP_D(ninput=config.nhidden, noutput=1, layers=config.arch_d)
-        self.classifier = MLP_Classify(ninput=config.nhidden, noutput=1, layers=config.arch_classify)
+        self.classifier = MLP_Classify(ninput=config.nhidden, noutput=1, layers=config.arch_classify, gpu=config.cuda)
 
         self.autoencoder_opt = optim.SGD(
             self.autoencoder.parameters(), lr=config.lr_ae)

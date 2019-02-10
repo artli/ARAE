@@ -9,29 +9,30 @@ from utils import to_gpu
 
 
 class MLP_Classify(nn.Module):
-    def __init__(self, ninput, noutput, layers, activation=nn.ReLU()):
+    def __init__(self, ninput, noutput, layers, activation=nn.ReLU(), gpu=False):
         super(MLP_Classify, self).__init__()
         self.ninput = ninput
         self.noutput = noutput
+        self.gpu = gpu
 
         layer_sizes = [ninput] + [int(x) for x in layers.split('-')]
         self.layers = []
 
         for i in range(len(layer_sizes) - 1):
-            layer = nn.Linear(layer_sizes[i], layer_sizes[i + 1])
+            layer = to_gpu(self.gpu, nn.Linear(layer_sizes[i], layer_sizes[i + 1]))
             self.layers.append(layer)
             self.add_module("layer" + str(i + 1), layer)
 
             # No batch normalization in first layer
             if i != 0:
-                bn = nn.BatchNorm1d(layer_sizes[i + 1])
+                bn = to_gpu(self.gpu, nn.BatchNorm1d(layer_sizes[i + 1]))
                 self.layers.append(bn)
                 self.add_module("bn" + str(i + 1), bn)
 
-            self.layers.append(activation)
+            self.layers.append(to_gpu(self.gpu, activation))
             self.add_module("activation" + str(i + 1), activation)
 
-        layer = nn.Linear(layer_sizes[-1], noutput)
+        layer = to_gpu(self.gpu, nn.Linear(layer_sizes[-1], noutput))
         self.layers.append(layer)
         self.add_module("layer" + str(len(self.layers)), layer)
 

@@ -1,2 +1,4 @@
+flask
 nltk
+numpy
 torch>=1.0.1
