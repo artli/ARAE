@@ -2,6 +2,7 @@ import bisect
 import logging
 import json
 import os
+import sys
 import glob
 import random
 import time
@@ -777,14 +778,20 @@ class TextOperations:
 
 def main():
     args = load_args()
+    if args.mode != 'train' and not args.load_models:
+        print('--load_models is required in all modes except "train"', file=sys.stderr)
+        sys.exit(1)
     set_up_logging(args.working_dir)
     logging.info('train.py launched with args: ' + str(vars(args)))
     with open('{}/args.json'.format(args.working_dir), 'w') as f:
         json.dump(vars(args), f)
 
-    dictionary = None
+    data = None
     if args.load_models:
         dictionary = Dictionary.load(args.working_dir)
+    else:
+        data = Data(DataConfig.from_args(args))
+        dictionary = data.dictionary
     preprocessor = Preprocessor(dictionary)
 
     models = Models(ModelsConfig.from_args(args, ntokens=len(dictionary)))
@@ -796,7 +803,8 @@ def main():
         logging.info('Model weights successfully loaded from ' + args.working_dir)
 
     if args.mode == 'train':
-        data = Data(DataConfig.from_args(args), dictionary)
+        if data is None:
+            data = Data(DataConfig.from_args(args), dictionary)
         logging.info("Data successfully loaded")
         trainer = Trainer(TrainingConfig.from_args(args), data, models)
         trainer.train()
