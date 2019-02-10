@@ -19,6 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.autograd import Variable
+from flask import Flask, request, jsonify
 
 from models import Seq2Seq2Decoder, MLP_D, MLP_G, MLP_Classify
 from utils import to_gpu, Corpus, batchify, Preprocessor, Dictionary
@@ -79,10 +80,13 @@ def parse_args():
 
     # Evaluation Arguments
     parser.add_argument('--sample', action='store_true', help='sample when decoding for generation')
+    parser.set_defaults(sample=False)
     parser.add_argument('--log_interval', type=int, default=200, help='interval to log autoencoder training results')
 
     # Other
-    parser.add_argument('--mode', type=str, default='train', help='what to do ("train", "transfer" or "interpolate")')
+    parser.add_argument('--mode', type=str, default='train',
+                        help='what to do ("train", "transfer", "interpolate" or "serve")')
+    parser.add_argument('--port', type=int, default=8002, help='port for the server')
     parser.add_argument('--midpoint_count', type=int, default=4, help='midpoint count for text interpolation')
     parser.add_argument('--seed', type=int, default=1111, help='random seed')
     parser.add_argument('--cuda', dest='cuda', action='store_true', help='use CUDA')
@@ -205,7 +209,8 @@ class ModelsConfig(NamedTuple, NamedTupleFromArgs):
 
 
 class Models:
-    MODEL_NAMES = 'autoencoder', 'generator', 'discriminator', 'classifier'
+    # MODEL_NAMES = 'autoencoder', 'generator', 'discriminator', 'classifier'
+    MODEL_NAMES = 'autoencoder', 'generator', 'discriminator'
 
     def __init__(self, config: ModelsConfig):
         self.config = config
@@ -765,16 +770,17 @@ class TextOperations:
         self.cuda = cuda
         self.maxlen = maxlen
 
-    def transfer_batch(self, batch, style_code, sample, temp):
+    def transfer_batch(self, batch, style_code, temp=None):
         source, _, lengths = batch
         with torch.no_grad():
             source = to_gpu(self.cuda, Variable(source))
             hidden = self.models.autoencoder(0, source, lengths, noise=False, encode_only=True)
-            output = self.models.autoencoder.generate(style_code, hidden, maxlen=50, sample=sample, temp=temp)
+            output = self.models.autoencoder.generate(
+                style_code, hidden, maxlen=50, sample=temp is not None, temp=temp)
             output = output.view(len(source), -1).data.cpu().numpy()
         return output
 
-    def interpolate_batches(self, batch1, batch2, midpoint_count, style_code, sample, temp):
+    def interpolate_batches(self, batch1, batch2, midpoint_count, style_code, temp):
         source1, _, lengths1 = batch1
         source2, _, lengths2 = batch2
         coeffs = np.linspace(0, 1, midpoint_count + 2)
@@ -787,23 +793,57 @@ class TextOperations:
             points = [hidden2 * coeff + hidden1 * (1 - coeff) for coeff in coeffs]
             for point in points:
                 output = self.models.autoencoder.generate(
-                    style_code, point, maxlen=50, sample=sample, temp=temp)
+                    style_code, point, maxlen=50, sample=temp is not None, temp=temp)
                 output = output.view(len(source1), -1).data.cpu().numpy()
                 results.append(output)
         return results
 
-    def transfer_text(self, text, style_code, sample, temp):
+    def transfer_text(self, text, style_code, temp=None):
         batch = self.preprocessor.text_to_batch(text, maxlen=self.maxlen)
-        transferred = self.transfer_batch(batch, style_code, sample, temp)
+        transferred = self.transfer_batch(batch, style_code, temp)
         return self.preprocessor.batch_to_text(transferred)
 
-    def interpolate_texts(self, text1, text2, midpoint_count, style_code, sample, temp):
+    def interpolate_texts(self, text1, text2, midpoint_count, style_code, temp=None):
         batch1 = self.preprocessor.text_to_batch(text1, maxlen=self.maxlen)
         batch2 = self.preprocessor.text_to_batch(text2, maxlen=self.maxlen)
         if len(batch1) != len(batch2):
             raise ValueError('Can only interpolate between texts with the same number of sentences')
-        results = self.interpolate_batches(batch1, batch2, midpoint_count, style_code, sample, temp)
+        results = self.interpolate_batches(batch1, batch2, midpoint_count, style_code, temp)
         return list(map(self.preprocessor.batch_to_text, results))
+
+
+class Server:
+    def __init__(self, operations: TextOperations, app: Flask, port: int, default_midpoint_count):
+        self._operations = operations
+        self._app = app
+        self._port = port
+        self._default_midpoint_count = default_midpoint_count
+        app.route('/api/transfer')(self.transfer)
+        app.route('/api/interpolate')(self.interpolate)
+
+    def transfer(self):
+        text = request.args['text']
+        temperature = request.args.get('temperature')
+        if temperature:
+            temperature = float(temperature)
+        positive = self._operations.transfer_text(text, 1, temperature)
+        negative = self._operations.transfer_text(text, 2, temperature)
+        return jsonify(dict(positive=positive, negative=negative))
+
+    def interpolate(self):
+        text1 = request.args['text1']
+        text2 = request.args['text2']
+        midpoint_count = request.args.get('midpoint_count', self._default_midpoint_count)
+        midpoint_count = int(midpoint_count)
+        temperature = request.args.get('temperature')
+        if temperature:
+            temperature = float(temperature)
+        positive = self._operations.interpolate_texts(text1, text2, midpoint_count, 1, temperature)
+        negative = self._operations.interpolate_texts(text1, text2, midpoint_count, 2, temperature)
+        return jsonify(dict(positive=positive, negative=negative))
+
+    def serve(self):
+        self._app.run(host='0.0.0.0', port=self._port, debug=True, threaded=True)
 
 
 def main():
@@ -815,8 +855,6 @@ def main():
         set_up_working_dir(args.working_dir)
     set_up_logging(args.working_dir)
     logging.info('train.py launched with args: ' + str(vars(args)))
-    with open('{}/args.json'.format(args.working_dir), 'w') as f:
-        json.dump(vars(args), f)
 
     data = None
     if args.load_models:
@@ -833,6 +871,11 @@ def main():
     if args.load_models:
         models.load_state(args.working_dir, args.first_epoch - 1)
         logging.info('Model weights successfully loaded from ' + args.working_dir)
+    with open('{}/args.json'.format(args.working_dir), 'w') as f:
+        json.dump(vars(args), f)
+    logging.info('Saved the current arguments into {}/args.json'.format(args.working_dir))
+
+    operations = TextOperations(preprocessor, models, args.cuda, args.maxlen)
 
     if args.mode == 'train':
         if data is None:
@@ -841,16 +884,14 @@ def main():
         trainer = Trainer(TrainingConfig.from_args(args), data, models)
         trainer.train()
     elif args.mode == 'transfer':
-        operations = TextOperations(preprocessor, models, args.cuda, args.maxlen)
         while True:
             text = input('> ')
             if not text:
                 continue
             for style_code in (1, 2):
-                transferred = operations.transfer_text(text, style_code, args.sample, args.temp)
+                transferred = operations.transfer_text(text, style_code, args.temp if args.sample else None)
                 print('Transferred to style {}:\t{}'.format(style_code, transferred))
     elif args.mode == 'interpolate':
-        operations = TextOperations(preprocessor, models, args.cuda, args.maxlen)
         while True:
             text1 = input('1> ')
             text2 = input('2> ')
@@ -859,13 +900,17 @@ def main():
             for style_code in (1, 2):
                 try:
                     results = operations.interpolate_texts(
-                        text1, text2, args.midpoint_count, style_code, args.sample, args.temp)
+                        text1, text2, args.midpoint_count, style_code, args.temp if args.sample else None)
                 except ValueError:
                     traceback.print_exc()
                     break
                 print(' Interpolation in style {}:'.format(style_code))
                 print('\n'.join(results))
                 print()
+    elif args.mode == 'serve':
+        app = Flask(__name__)
+        server = Server(operations, app, args.port, args.midpoint_count)
+        server.serve()
     else:
         logging.error('"{}" is an unrecognized option for "mode". Nothing to do, exiting...'.format(args.mode))
 
