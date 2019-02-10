@@ -61,6 +61,7 @@ def parse_args():
     # Training Arguments
     parser.add_argument('--epochs', type=int, default=25, help='maximum number of epochs')
     parser.add_argument('--first_epoch', type=int, default=1, help='first epoch number')
+    parser.add_argument('--save_every', type=int, default=10, help='delete all model checkpoints except every nth')
     parser.add_argument('--batch_size', type=int, default=64, metavar='N', help='batch size')
     parser.add_argument('--niters_ae', type=int, default=1, help='number of autoencoder iterations in training')
     parser.add_argument('--niters_gan_d', type=int, default=5, help='number of discriminator iterations in training')
@@ -248,6 +249,11 @@ class Models:
             with open(path, 'wb') as f:
                 torch.save(model.state_dict(), f)
 
+    def cleanup(self, working_dir, epoch):
+        for _, path in self._models_and_paths(working_dir, epoch):
+            if os.path.exists(path):
+                os.remove(path)
+
     def load_state(self, working_dir, epoch):
         for model, path in self._models_and_paths(working_dir, epoch):
             model.load_state_dict(
@@ -311,6 +317,7 @@ class TrainingConfig(NamedTuple, NamedTupleFromArgs):
     batch_size: int
     epochs: int
     first_epoch: int
+    save_every: int
     log_interval: int
     niters_gan_schedule: str
     niters_ae: int
@@ -454,6 +461,8 @@ class Trainer:
 
         logging.info('Saving models into ' + self.config.working_dir)
         self.models.save_state(self.config.working_dir, context.epoch)
+        if (context.epoch - 1) % self.config.save_every != 0:
+            self.models.cleanup(self.config.working_dir, context.epoch - 1)
         self.data.shuffle_training_data()
 
     def train_classifier(self, whichclass, batch):
