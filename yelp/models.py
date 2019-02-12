@@ -1,11 +1,16 @@
+import os
+from typing import NamedTuple
+
 import numpy as np
 import torch
+import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
-from utils import to_gpu
+from data import Preprocessor
+from utils import to_gpu, format_epoch, NamedTupleFromArgs
 
 
 class MLP_Classify(nn.Module):
@@ -570,3 +575,126 @@ def generate(autoencoder, gan_gen, z, vocab, sample, maxlen):
         sentences.append(sent)
 
     return sentences
+
+
+class ModelsConfig(NamedTuple, NamedTupleFromArgs):
+    ntokens: int
+    emsize: int
+    nhidden: int
+    nlayers: int
+    noise_r: float
+    hidden_init: bool
+    dropout: float
+    z_size: int
+    arch_g: str
+    arch_d: str
+    arch_classify: str
+    lr_ae: float
+    lr_gan_g: float
+    lr_gan_d: float
+    lr_classify: float
+    beta1: float
+    cuda: bool
+
+
+class Models:
+    MODEL_NAMES = 'autoencoder', 'generator', 'discriminator', 'classifier'
+
+    def __init__(self, config: ModelsConfig):
+        self.config = config
+
+        self.autoencoder = Seq2Seq2Decoder(
+            emsize=config.emsize, nhidden=config.nhidden, ntokens=config.ntokens, nlayers=config.nlayers,
+            noise_r=config.noise_r, hidden_init=config.hidden_init, dropout=config.dropout, gpu=config.cuda)
+        self.generator = MLP_G(ninput=config.z_size, noutput=config.nhidden, layers=config.arch_g)
+        self.discriminator = MLP_D(ninput=config.nhidden, noutput=1, layers=config.arch_d)
+        self.classifier = MLP_Classify(ninput=config.nhidden, noutput=1, layers=config.arch_classify, gpu=config.cuda)
+
+        self.autoencoder_opt = optim.SGD(
+            self.autoencoder.parameters(), lr=config.lr_ae)
+        self.generator_opt = optim.Adam(
+            self.generator.parameters(), lr=config.lr_gan_g, betas=(config.beta1, 0.999))
+        self.discriminator_opt = optim.Adam(
+            self.discriminator.parameters(), lr=config.lr_gan_d, betas=(config.beta1, 0.999))
+        self.classifier_opt = optim.Adam(
+            self.classifier.parameters(), lr=config.lr_classify, betas=(config.beta1, 0.999))
+
+        self.cross_entropy = nn.CrossEntropyLoss()
+
+        if config.cuda:
+            for attr_name in self.MODEL_NAMES + ('cross_entropy',):
+                node = getattr(self, attr_name)
+                setattr(self, attr_name, node.cuda())
+
+    def _models_and_paths(self, working_dir, epoch, model_names=MODEL_NAMES):
+        for model_name in model_names:
+            model = getattr(self, model_name)
+            path = os.path.join(working_dir, 'models', '{}_{}.pt'.format(format_epoch(epoch), model_name))
+            yield model, path
+
+    def save_state(self, working_dir, epoch):
+        for model, path in self._models_and_paths(working_dir, epoch):
+            if model is not None:
+                with open(path, 'wb') as f:
+                    torch.save(model.state_dict(), f)
+
+    def cleanup(self, working_dir, epoch):
+        for _, path in self._models_and_paths(working_dir, epoch):
+            if os.path.exists(path):
+                os.remove(path)
+
+    def load_state(self, working_dir, epoch, model_names=MODEL_NAMES):
+        for model, path in self._models_and_paths(working_dir, epoch, model_names=model_names):
+            model.load_state_dict(
+                torch.load(path, map_location=lambda storage, loc: to_gpu(self.config.cuda, storage)))
+        for model_name in set(self.MODEL_NAMES) - set(model_names):
+            setattr(self, model_name, None)
+
+
+class TextOperations:
+    def __init__(self, preprocessor: Preprocessor, models: Models, cuda: bool, maxlen: int):
+        self.preprocessor = preprocessor
+        self.models = models
+        self.cuda = cuda
+        self.maxlen = maxlen
+
+    def transfer_batch(self, batch, style_code, temp=None):
+        source, _, lengths = batch
+        with torch.no_grad():
+            source = to_gpu(self.cuda, Variable(source))
+            hidden = self.models.autoencoder(0, source, lengths, noise=False, encode_only=True)
+            output = self.models.autoencoder.generate(
+                style_code, hidden, maxlen=50, sample=temp is not None, temp=temp)
+            output = output.view(len(source), -1).data.cpu().numpy()
+        return output
+
+    def interpolate_batches(self, batch1, batch2, midpoint_count, style_code, temp):
+        source1, _, lengths1 = batch1
+        source2, _, lengths2 = batch2
+        coeffs = np.linspace(0, 1, midpoint_count + 2)
+        results = []
+        with torch.no_grad():
+            source1 = to_gpu(self.cuda, Variable(source1))
+            source2 = to_gpu(self.cuda, Variable(source2))
+            hidden1 = self.models.autoencoder(0, source1, lengths1, noise=False, encode_only=True)
+            hidden2 = self.models.autoencoder(0, source2, lengths2, noise=False, encode_only=True)
+            points = [hidden2 * coeff + hidden1 * (1 - coeff) for coeff in coeffs]
+            for point in points:
+                output = self.models.autoencoder.generate(
+                    style_code, point, maxlen=50, sample=temp is not None, temp=temp)
+                output = output.view(len(source1), -1).data.cpu().numpy()
+                results.append(output)
+        return results
+
+    def transfer_text(self, text, style_code, temp=None):
+        batch = self.preprocessor.text_to_batch(text, maxlen=self.maxlen)
+        transferred = self.transfer_batch(batch, style_code, temp)
+        return self.preprocessor.batch_to_text(transferred)
+
+    def interpolate_texts(self, text1, text2, midpoint_count, style_code, temp=None):
+        batch1 = self.preprocessor.text_to_batch(text1, maxlen=self.maxlen)
+        batch2 = self.preprocessor.text_to_batch(text2, maxlen=self.maxlen)
+        if len(batch1) != len(batch2):
+            raise ValueError('Can only interpolate between texts with the same number of sentences')
+        results = self.interpolate_batches(batch1, batch2, midpoint_count, style_code, temp)
+        return list(map(self.preprocessor.batch_to_text, results))
