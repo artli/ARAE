@@ -1,10 +1,10 @@
+import argparse
 import glob
 import json
 import logging
 import os
 import sys
 import traceback
-from argparse import ArgumentParser, Namespace
 from collections import Counter
 
 from flask import Flask, request, jsonify
@@ -14,8 +14,35 @@ from models import Models, ModelsConfig, TextOperations
 from training import Trainer, TrainingConfig
 
 
+class ArgumentParserWrapper:
+    def __init__(self, *args, **kwargs):
+        self._parser = argparse.ArgumentParser(*args, **kwargs)
+        self._defaults = {}
+
+    def add_argument(self, arg, default=None, **kwargs):
+        if 'dest' in kwargs:
+            name = kwargs['dest']
+        else:
+            name = arg.lstrip('-')
+        self._defaults[name] = default
+        return self._parser.add_argument(arg, **kwargs)
+
+    def set_defaults(self, **kwargs):
+        self._parser.set_defaults(**kwargs)
+
+    def parse_args(self):
+        args = self._parser.parse_args()
+        explicitly_provided = {}
+        for arg_name, default in self._defaults.items():
+            if getattr(args, arg_name) is None:
+                setattr(args, arg_name, default)
+            else:
+                explicitly_provided[arg_name] = getattr(args, arg_name)
+        return args, explicitly_provided
+
+
 def parse_args():
-    parser = ArgumentParser(description='ARAE for Yelp transfer')
+    parser = ArgumentParserWrapper(description='ARAE for Yelp transfer')
 
     # Path Arguments
     parser.add_argument('--data_dir', type=str, default='dataset', help='location of the data corpus')
@@ -96,17 +123,17 @@ def last_saved_epoch(working_dir):
     return last_epoch
 
 
-def load_args() -> Namespace:
-    args = parse_args()
+def load_args() -> argparse.Namespace:
+    args, explicit = parse_args()
     if not args.load_models:
         return args
 
     with open('{}/args.json'.format(args.working_dir)) as f:
         saved_arg_dict = json.load(f)
-    saved_arg_dict.update(vars(args))
+    saved_arg_dict.update(**explicit)
     saved_arg_dict['first_epoch'] = last_saved_epoch(args.working_dir) + 1
 
-    saved_args = Namespace()
+    saved_args = argparse.Namespace()
     saved_args.__dict__ = saved_arg_dict
     return saved_args
 

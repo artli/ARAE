@@ -81,8 +81,8 @@ class NamedTupleFromArgs(metaclass=MultipleInheritanceNamedTupleMeta):
         values = []
         for field_name in cls.__annotations__:
             try:
-                value = getattr(args, field_name)
-            except AttributeError:
                 value = additional_fields[field_name]
+            except KeyError:
+                value = getattr(args, field_name)
             values.append(value)
         return cls(*values)
