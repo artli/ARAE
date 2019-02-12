@@ -238,26 +238,29 @@ class Models:
                 node = getattr(self, attr_name)
                 setattr(self, attr_name, node.cuda())
 
-    def _models_and_paths(self, working_dir, epoch):
-        for model_name in self.MODEL_NAMES:
+    def _models_and_paths(self, working_dir, epoch, model_names=MODEL_NAMES):
+        for model_name in model_names:
             model = getattr(self, model_name)
             path = os.path.join(working_dir, 'models', '{}_{}.pt'.format(format_epoch(epoch), model_name))
             yield model, path
 
     def save_state(self, working_dir, epoch):
         for model, path in self._models_and_paths(working_dir, epoch):
-            with open(path, 'wb') as f:
-                torch.save(model.state_dict(), f)
+            if model is not None:
+                with open(path, 'wb') as f:
+                    torch.save(model.state_dict(), f)
 
     def cleanup(self, working_dir, epoch):
         for _, path in self._models_and_paths(working_dir, epoch):
             if os.path.exists(path):
                 os.remove(path)
 
-    def load_state(self, working_dir, epoch):
-        for model, path in self._models_and_paths(working_dir, epoch):
+    def load_state(self, working_dir, epoch, model_names=MODEL_NAMES):
+        for model, path in self._models_and_paths(working_dir, epoch, model_names=model_names):
             model.load_state_dict(
                 torch.load(path, map_location=lambda storage, loc: to_gpu(self.config.cuda, storage)))
+        for model_name in set(self.MODEL_NAMES) - set(model_names):
+            setattr(self, model_name, None)
 
 
 def format_epoch(epoch):
@@ -884,8 +887,10 @@ def main():
     for model_name in models.MODEL_NAMES:
         logging.info(getattr(models, model_name))
     if args.load_models:
-        models.load_state(args.working_dir, args.first_epoch - 1)
+        model_names = Models.MODEL_NAMES if args.mode == 'train' else ('autoencoder',)
+        models.load_state(args.working_dir, args.first_epoch - 1, model_names=model_names)
         logging.info('Model weights successfully loaded from ' + args.working_dir)
+
     with open('{}/args.json'.format(args.working_dir), 'w') as f:
         json.dump(vars(args), f)
     logging.info('Saved the current arguments into {}/args.json'.format(args.working_dir))
