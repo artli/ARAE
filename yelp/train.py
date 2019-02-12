@@ -241,7 +241,7 @@ class Models:
     def _models_and_paths(self, working_dir, epoch):
         for model_name in self.MODEL_NAMES:
             model = getattr(self, model_name)
-            path = os.path.join(working_dir, 'models', '{:03d}_{}.pt'.format(epoch, model_name))
+            path = os.path.join(working_dir, 'models', '{}_{}.pt'.format(format_epoch(epoch), model_name))
             yield model, path
 
     def save_state(self, working_dir, epoch):
@@ -260,6 +260,13 @@ class Models:
                 torch.load(path, map_location=lambda storage, loc: to_gpu(self.config.cuda, storage)))
 
 
+def format_epoch(epoch):
+    if epoch is None:
+        return 'final'
+    else:
+        return '{:03d}'.format(epoch)
+
+
 AutoencoderEvaluationResult = namedtuple('AutoencoderEvaluationResult', 'test_loss test_ppl test_accuracy')
 
 
@@ -267,7 +274,7 @@ def log_epoch_end(epoch, elapsed, autoencoder_results: Iterable[AutoencoderEvalu
     if epoch is None:
         description = 'Final evaluation'
     else:
-        description = 'Epoch {:03d}'.format(epoch)
+        description = 'Epoch ' + format_epoch(epoch)
     logging.info('{} ended in {:5.2f} seconds'.format(description, elapsed))
     for number, result in enumerate(autoencoder_results, start=1):
         logging.info('Autoencoder {} evaluation:\ttest loss: {:5.2f},\ttest ppl {:5.2f},\tacc {:3.3f}'
@@ -556,8 +563,8 @@ class Trainer:
             total_loss += self.models.cross_entropy(masked_output / self.config.temp, masked_target).data
             bcnt += 1
 
-            path_prefix = '{}/texts/{:03d}_decoder{}'.format(
-                self.config.working_dir, epoch if epoch is not None else 'final', whichdecoder)
+            path_prefix = '{}/texts/{}_decoder{}'.format(
+                self.config.working_dir, format_epoch(epoch), whichdecoder)
             decoder_source_path = path_prefix + '_source.txt'
             decoder_result_path = path_prefix + '_result.txt'
             with open(decoder_source_path, 'w') as f_from, open(decoder_result_path, 'w') as f_trans:
@@ -586,8 +593,8 @@ class Trainer:
         max_indices = self.models.autoencoder.generate(
             whichdecoder, fake_hidden, maxlen=50, sample=self.config.sample)
 
-        with open('{}/texts/{:03d}_generator{}.txt'.format(
-                  self.config.working_dir, epoch if epoch is not None else 'final', whichdecoder), "w") as f:
+        with open('{}/texts/{}_generator{}.txt'.format(
+                  self.config.working_dir, format_epoch(epoch), whichdecoder), "w") as f:
             max_indices = max_indices.data.cpu().numpy()
             for idx in max_indices:
                 # generated sentence
@@ -632,9 +639,9 @@ class Trainer:
             accuracy = torch.mean(max_indices.eq(masked_target).float()).item()
             cur_loss = total_loss_ae.item() / self.config.log_interval
             elapsed = time.time() - start_time
-            logging.info('| epoch {:03d} | {:5d}/{:5d} batches | ms/batch {:5.2f} | '
+            logging.info('| epoch {} | {:5d}/{:5d} batches | ms/batch {:5.2f} | '
                          'loss {:5.2f} | ppl {:8.2f} | acc {:8.2f}'
-                         .format(epoch, i, len(self.data.train1_data),
+                         .format(format_epoch(epoch), i, len(self.data.train1_data),
                                  elapsed * 1000 / self.config.log_interval,
                                  cur_loss, math.exp(cur_loss), accuracy))
 
