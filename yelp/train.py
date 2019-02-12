@@ -836,12 +836,17 @@ class Server:
         self._app = app
         self._port = port
         self._default_midpoint_count = default_midpoint_count
-        app.route('/api/transfer')(self.transfer)
-        app.route('/api/interpolate')(self.interpolate)
+        app.route('/api/transfer', methods=['GET', 'POST'])(self.transfer)
+        app.route('/api/interpolate', methods=['GET', 'POST'])(self.interpolate)
+
+    @staticmethod
+    def _parameters():
+        return request.args if request.method == 'GET' else request.form
 
     def transfer(self):
-        text = request.args['text']
-        temperature = request.args.get('temperature')
+        parameters = self._parameters()
+        text = parameters['text']
+        temperature = parameters.get('temperature')
         if temperature:
             temperature = float(temperature)
         positive = self._operations.transfer_text(text, 1, temperature)
@@ -849,11 +854,12 @@ class Server:
         return jsonify(dict(positive=positive, negative=negative))
 
     def interpolate(self):
-        text1 = request.args['text1']
-        text2 = request.args['text2']
-        midpoint_count = request.args.get('midpoint_count', self._default_midpoint_count)
+        parameters = self._parameters()
+        text1 = parameters['text1']
+        text2 = parameters['text2']
+        midpoint_count = parameters.get('midpoint_count', self._default_midpoint_count)
         midpoint_count = int(midpoint_count)
-        temperature = request.args.get('temperature')
+        temperature = parameters.get('temperature')
         if temperature:
             temperature = float(temperature)
         positive = self._operations.interpolate_texts(text1, text2, midpoint_count, 1, temperature)
