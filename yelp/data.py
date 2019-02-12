@@ -119,7 +119,7 @@ class Corpus:
                 lines.append(preprocessor.words_to_ids(words))
 
         logging.info('Dropped {} sentences out of {} from {}'.format(dropped, linecount, path))
-        return lines[:100]
+        return lines
 
 
 class DataConfig(NamedTuple, NamedTupleFromArgs):
