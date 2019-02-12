@@ -1,15 +1,9 @@
-import os
 import math
 import random
 import typing
 
 import numpy as np
 import torch
-
-
-def load_kenlm():
-    global kenlm
-    import kenlm
 
 
 def to_gpu(gpu, var):
@@ -62,41 +56,6 @@ def length_sort(items, lengths, descending=True):
     items.sort(key=lambda x: x[1], reverse=True)
     items, lengths = zip(*items)
     return list(items), list(lengths)
-
-
-def train_ngram_lm(kenlm_path, data_path, output_path, N):
-    """
-    Trains a modified Kneser-Ney n-gram KenLM from a text file.
-    Creates a .arpa file to store n-grams.
-    """
-    # create .arpa file of n-grams
-    curdir = os.path.abspath(os.path.curdir)
-
-    command = "bin/lmplz -o " + str(N) + " <" + os.path.join(curdir, data_path) + \
-              " >" + os.path.join(curdir, output_path)
-    os.system("cd " + os.path.join(kenlm_path, 'build') + " && " + command)
-
-    load_kenlm()
-    # create language model
-    model = kenlm.Model(output_path)
-
-    return model
-
-
-def get_ppl(lm, sentences):
-    """
-    Assume sentences is a list of strings (space delimited sentences)
-    """
-    total_nll = 0
-    total_wc = 0
-    for sent in sentences:
-        words = sent.strip().split()
-        score = lm.score(sent, bos=True, eos=False)
-        word_count = len(words)
-        total_wc += word_count
-        total_nll += score
-    ppl = 10 ** -(total_nll / total_wc)
-    return ppl
 
 
 def format_epoch(epoch):
