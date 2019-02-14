@@ -3,11 +3,11 @@ import logging
 import os
 import string
 from collections import Counter
-from typing import NamedTuple
+from typing import NamedTuple, Collection, List
 
 from nltk import sent_tokenize, word_tokenize
 
-from utils import batchify, NamedTupleFromArgs
+from utils import NamedTupleFromArgs, TrainingBatch, ModelBatch, batchify, permute
 
 
 PAD_WORD = "<pad>"
@@ -56,7 +56,7 @@ class Preprocessor:
     def __init__(self, dictionary: Dictionary):
         self.dictionary = dictionary
 
-    def words_to_ids(self, sentence, maxlen=0):
+    def sentence_to_ids(self, sentence: List[str], maxlen: int = 0) -> List[int]:
         if maxlen > 0:
             sentence = sentence[:maxlen]
         words = [BOS_WORD] + sentence + [EOS_WORD]
@@ -64,24 +64,29 @@ class Preprocessor:
         unk_id = vocab[UNK]
         return [vocab.get(word, unk_id) for word in words]
 
-    def text_to_ids(self, text, maxlen=0):
-        text = text.lower()
-        sentences = [word_tokenize(sentence) for sentence in sent_tokenize(text)]
-        return [self.words_to_ids(sentence, maxlen=maxlen) for sentence in sentences]
+    def text_to_sentences(self, text: str) -> List[List[str]]:
+        return [
+            word_tokenize(sentence)
+            for sentence in sent_tokenize(text.lower())]
 
-    def text_to_batch(self, text, maxlen=0):
-        encoded = self.text_to_ids(text, maxlen=maxlen)
+    def text_to_model_batch(self, text: str, maxlen: int = 0) -> ModelBatch:
+        return [
+            self.sentence_to_ids(sentence, maxlen=maxlen)
+            for sentence in self.text_to_sentences(text)]
+
+    def text_to_training_batch(self, text: str, maxlen: int = 0) -> TrainingBatch:
+        encoded = self.text_to_model_batch(text, maxlen=maxlen)
         return batchify(encoded, len(encoded))[0]
 
-    def batch_to_sentences(self, batch):
+    def model_batch_to_sentences(self, batch: ModelBatch, inverse_permutation=None) -> List[List[str]]:
         sentences = [[self.dictionary.idx2word[id] for id in sentence]
-                     for sentence in batch]
+                     for sentence in permute(batch, inverse_permutation)]
         for sentence in sentences:
             if EOS_WORD in sentence:
                 sentence[sentence.index(EOS_WORD):] = []
         return sentences
 
-    def sentence_to_text(self, sentence):
+    def sentence_to_text(self, sentence: Collection[str]) -> str:
         to_join = []
         for token in sentence:
             if not to_join:
@@ -91,8 +96,9 @@ class Preprocessor:
             to_join.append(token)
         return ''.join(to_join).strip()
 
-    def batch_to_text(self, batch):
-        return ' '.join(map(self.sentence_to_text, self.batch_to_sentences(batch)))
+    def model_batch_to_text(self, batch: ModelBatch, inverse_permutation=None) -> str:
+        return ' '.join(map(self.sentence_to_text,
+                            self.model_batch_to_sentences(batch, inverse_permutation=inverse_permutation)))
 
 
 class Corpus:
@@ -116,7 +122,7 @@ class Corpus:
                 if len(words) > self.maxlen > 0:
                     dropped += 1
                     continue
-                lines.append(preprocessor.words_to_ids(words))
+                lines.append(preprocessor.sentence_to_ids(words))
 
         logging.info('Dropped {} sentences out of {} from {}'.format(dropped, linecount, path))
         return lines

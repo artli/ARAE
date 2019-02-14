@@ -226,7 +226,7 @@ class Trainer:
         self.models.classifier.train()
         self.models.classifier.zero_grad()
 
-        source, target, lengths = batch
+        source, target, lengths, _ = batch
         source = to_gpu(self.config.cuda, Variable(source))
         labels = to_gpu(self.config.cuda, Variable(torch.zeros(source.size(0)).fill_(whichclass - 1)))
 
@@ -247,7 +247,7 @@ class Trainer:
         self.models.autoencoder.train()
         self.models.autoencoder.zero_grad()
 
-        source, target, lengths = batch
+        source, target, lengths, _ = batch
         source = to_gpu(self.config.cuda, Variable(source))
         target = to_gpu(self.config.cuda, Variable(target))
         flippedclass = abs(2 - whichclass)
@@ -272,7 +272,7 @@ class Trainer:
         all_accuracies = 0
         bcnt = 0
         for i, batch in enumerate(data_source):
-            source, target, lengths = batch
+            source, target, lengths, _ = batch
             with torch.no_grad():
                 source = to_gpu(self.config.cuda, Variable(source))
                 target = to_gpu(self.config.cuda, Variable(target))
@@ -364,7 +364,7 @@ class Trainer:
         self.models.autoencoder.train()
         self.models.autoencoder_opt.zero_grad()
 
-        source, target, lengths = batch
+        source, target, lengths, _ = batch
         source = to_gpu(self.config.cuda, Variable(source))
         target = to_gpu(self.config.cuda, Variable(target))
 
@@ -438,7 +438,7 @@ class Trainer:
 
         # positive samples ----------------------------
         # generate real codes
-        source, target, lengths = batch
+        source, target, lengths, _ = batch
         source = to_gpu(self.config.cuda, Variable(source))
         target = to_gpu(self.config.cuda, Variable(target))
 
@@ -472,7 +472,7 @@ class Trainer:
         self.models.autoencoder.train()
         self.models.autoencoder_opt.zero_grad()
 
-        source, target, lengths = batch
+        source, target, lengths, _ = batch
         source = to_gpu(self.config.cuda, Variable(source))
         target = to_gpu(self.config.cuda, Variable(target))
         real_hidden = self.models.autoencoder(whichdecoder, source, lengths, noise=False, encode_only=True)

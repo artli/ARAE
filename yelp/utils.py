@@ -12,7 +12,17 @@ def to_gpu(gpu, var):
     return var
 
 
-def batchify(data, bsz, shuffle=False, gpu=False):
+ModelBatch = typing.Collection[typing.Collection[int]]
+
+
+class TrainingBatch(typing.NamedTuple):
+    source: ModelBatch
+    target: ModelBatch
+    lengths: typing.Collection[int]
+    inverse_permutation: typing.Collection[int]
+
+
+def batchify(data, bsz, shuffle=False) -> typing.List[TrainingBatch]:
     if shuffle:
         random.shuffle(data)
 
@@ -28,7 +38,7 @@ def batchify(data, bsz, shuffle=False, gpu=False):
         lengths = [len(x) - 1 for x in words]
 
         # sort items by length (decreasing)
-        batch, lengths = length_sort(batch, lengths)
+        batch, lengths, inverse_permutation = length_sort(batch, lengths)
         words = batch
 
         # source has no end symbol
@@ -46,16 +56,26 @@ def batchify(data, bsz, shuffle=False, gpu=False):
         source = torch.LongTensor(np.array(source))
         target = torch.LongTensor(np.array(target)).view(-1)
 
-        batches.append((source, target, lengths))
+        batches.append(TrainingBatch(source, target, lengths, inverse_permutation))
     return batches
 
 
 def length_sort(items, lengths, descending=True):
     """In order to use pytorch variable length sequence package"""
-    items = list(zip(items, lengths))
-    items.sort(key=lambda x: x[1], reverse=True)
-    items, lengths = zip(*items)
-    return list(items), list(lengths)
+    zipped = list(zip(items, lengths, range(len(items))))
+    zipped.sort(key=lambda x: x[1], reverse=descending)
+    items, lengths, inverse_permutation = zip(*zipped)
+    return list(items), list(lengths), list(inverse_permutation)
+
+
+def permute(arr, permutation):
+    """ Permute the array: permutation[i] is the new index for the i-th element of arr """
+    if permutation is None:
+        permutation = range(len(arr))
+    result = [None] * len(arr)
+    for element, index in zip(arr, permutation):
+        result[index] = element
+    return result
 
 
 def format_epoch(epoch):

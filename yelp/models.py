@@ -1,4 +1,5 @@
 import os
+from functools import partial
 from typing import NamedTuple
 
 import numpy as np
@@ -10,7 +11,7 @@ from torch.autograd import Variable
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from data import Preprocessor
-from utils import to_gpu, format_epoch, NamedTupleFromArgs
+from utils import to_gpu, format_epoch, NamedTupleFromArgs, batchify
 
 
 class MLP_Classify(nn.Module):
@@ -659,18 +660,17 @@ class TextOperations:
         self.maxlen = maxlen
 
     def transfer_batch(self, batch, style_code, temp=None):
-        source, _, lengths = batch
         with torch.no_grad():
-            source = to_gpu(self.cuda, Variable(source))
-            hidden = self.models.autoencoder(0, source, lengths, noise=False, encode_only=True)
+            source = to_gpu(self.cuda, Variable(batch.source))
+            hidden = self.models.autoencoder(0, source, batch.lengths, noise=False, encode_only=True)
             output = self.models.autoencoder.generate(
                 style_code, hidden, maxlen=50, sample=temp is not None, temp=temp)
             output = output.view(len(source), -1).data.cpu().numpy()
         return output
 
     def interpolate_batches(self, batch1, batch2, midpoint_count, style_code, temp):
-        source1, _, lengths1 = batch1
-        source2, _, lengths2 = batch2
+        source1, _, lengths1, _ = batch1
+        source2, _, lengths2, _ = batch2
         coeffs = np.linspace(0, 1, midpoint_count + 2)
         results = []
         with torch.no_grad():
@@ -681,20 +681,26 @@ class TextOperations:
             points = [hidden2 * coeff + hidden1 * (1 - coeff) for coeff in coeffs]
             for point in points:
                 output = self.models.autoencoder.generate(
-                    style_code, point, maxlen=50, sample=temp is not None, temp=temp)
+                    style_code, point, maxlen=self.maxlen, sample=temp is not None, temp=temp)
                 output = output.view(len(source1), -1).data.cpu().numpy()
                 results.append(output)
         return results
 
     def transfer_text(self, text, style_code, temp=None):
-        batch = self.preprocessor.text_to_batch(text, maxlen=self.maxlen)
+        batch = self.preprocessor.text_to_training_batch(text, maxlen=self.maxlen)
         transferred = self.transfer_batch(batch, style_code, temp)
-        return self.preprocessor.batch_to_text(transferred)
+        return self.preprocessor.model_batch_to_text(transferred, inverse_permutation=batch.inverse_permutation)
 
     def interpolate_texts(self, text1, text2, midpoint_count, style_code, temp=None):
-        batch1 = self.preprocessor.text_to_batch(text1, maxlen=self.maxlen)
-        batch2 = self.preprocessor.text_to_batch(text2, maxlen=self.maxlen)
-        if len(batch1) != len(batch2):
+        sentences1 = self.preprocessor.text_to_sentences(text1)
+        sentences2 = self.preprocessor.text_to_sentences(text2)
+        if len(sentences1) != len(sentences2):
             raise ValueError('Can only interpolate between texts with the same number of sentences')
-        results = self.interpolate_batches(batch1, batch2, midpoint_count, style_code, temp)
-        return list(map(self.preprocessor.batch_to_text, results))
+
+        sentence_results = []
+        for sentence1, sentence2 in zip(sentences1, sentences2):
+            batch1 = batchify([self.preprocessor.sentence_to_ids(sentence1, maxlen=self.maxlen)], 1)[0]
+            batch2 = batchify([self.preprocessor.sentence_to_ids(sentence2, maxlen=self.maxlen)], 1)[0]
+            interpolates = self.interpolate_batches(batch1, batch2, midpoint_count, style_code, temp)
+            sentence_results.append([batch[0] for batch in interpolates])
+        return list(map(self.preprocessor.model_batch_to_text, zip(*sentence_results)))
